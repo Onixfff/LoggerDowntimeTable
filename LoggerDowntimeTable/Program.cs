@@ -1,5 +1,8 @@
 ﻿using LoggerDowntimeTable.Bd;
+using LoggerDowntimeTable.Exceptions;
+using MySql.Data.MySqlClient;
 using NLog;
+using System;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -21,12 +24,37 @@ namespace LoggerDowntimeTable
 
             while (true)
             {
-                _logger.Trace("Начало цикла");
+                try
+                {
+                    _logger.Trace("Начало цикла");
 
-                db.
+                    var result = await db.SynchronizeRecept();
 
-                _logger.Trace("Конец цикла");
-                Thread.Sleep(5000);
+                    if(result.error != null)
+                    {
+                        _logger.Error(result.error + "== Program ==");
+                        throw new Exception(result.error);
+                    }
+
+                    _logger.Trace("Сверка Recepts прошла успешно");
+
+
+
+                    _logger.Trace("Конец цикла");
+                    Thread.Sleep(5000);
+                }
+                catch (ExceptionRecept ex)
+                {
+
+                }
+                catch (MySqlException ex)
+                {
+
+                }
+                catch(Exception ex)
+                {
+
+                }
             }
         }
     }
