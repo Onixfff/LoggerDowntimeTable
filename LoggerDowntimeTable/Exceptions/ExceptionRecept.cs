@@ -4,9 +4,6 @@ namespace LoggerDowntimeTable.Exceptions
 {
     internal class ExceptionRecept : Exception
     {
-        public ExceptionRecept(string message) : base(message)
-        {
-
-        }
+        public ExceptionRecept(string message) : base(message) { }
     }
 }
