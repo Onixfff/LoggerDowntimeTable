@@ -1,11 +1,12 @@
 ﻿using LoggerDowntimeTable.Exceptions;
 using MySql.Data.MySqlClient;
 using NLog;
-using Org.BouncyCastle.Tls;
 using System;
 using System.Collections.Generic;
 using System.Configuration;
+using System.Data;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace LoggerDowntimeTable.Bd
@@ -73,7 +74,14 @@ namespace LoggerDowntimeTable.Bd
                         {
                             while (await reader.ReadAsync())
                             {
-                                recepts.Add(new Recept(reader.GetString(0)));
+                                var result = Recept.Create(reader.GetString(0));
+
+                                if (result.error != null)
+                                {
+                                    throw result.error;
+                                }
+
+                                recepts.Add(result.recept);
                             }
                             reader.Close();
                         }
@@ -146,12 +154,24 @@ namespace LoggerDowntimeTable.Bd
                         {
                             while (await reader.ReadAsync())
                             {
-                                recepts.Add(new Recept(reader.GetString(0)));
+                                var result = Recept.Create(reader.GetString(0));
+
+                                if(result.error != null)
+                                {
+                                    throw result.error;
+                                }
+
+                                recepts.Add(result.recept);
                             }
                             reader.Close();
                         }
                         return (recepts, null);
                     }
+                }
+                catch (ExceptionRecept ex)
+                {
+                    _logger.Error(ex, "GetLocalPCRecepts > Error (ExceptionRecept ex)");
+                    return (null, "GetLocalPCRecepts > Error (ExceptionRecept ex)");
                 }
                 catch (TimeoutException ex)
                 {
@@ -160,8 +180,8 @@ namespace LoggerDowntimeTable.Bd
                 }
                 catch (Exception ex)
                 {
-                    _logger.Error(ex.Message);
-                    return (null, $"{ex.Message}");
+                    _logger.Error(ex, $"{ex.Message}\n == {ex.TargetSite} ==");
+                    return (null, $"{ex.Message} GetLocalPCRecepts > Error (Exception ex)");
                 }
                 finally 
                 {
@@ -245,6 +265,141 @@ namespace LoggerDowntimeTable.Bd
 
                 return (true, null);
             }
+        }
+
+        //Create triger (testServer)
+        public async Task<(bool isComplite, Exception error)> CreateTrigerInServer()
+        {
+            var result = await DropTrigerInServer();
+
+            if (result.error != null)
+            {
+                _logger.Error(result.error.Message);
+                return (false, result.error);
+            }
+
+            using (MySqlConnection connection = new MySqlConnection(ConfigurationManager.ConnectionStrings["Server"].ConnectionString))
+            {
+                try
+                {
+                    await connection.OpenAsync();
+
+                    string createTriggerQuery = @"
+CREATE TRIGGER after_insert_mixreport_second
+AFTER INSERT ON mixreport
+FOR EACH ROW
+BEGIN
+    DECLARE previous_timestamp DATETIME;
+    DECLARE previous_data_52 VARCHAR(255);
+    DECLARE previous_id INT;
+    DECLARE time_difference TIME;
+
+    -- Получаем предыдущее событие на основе максимального Timestamp, который меньше текущего
+    SELECT Timestamp, Data_52, DBID INTO previous_timestamp, previous_data_52, previous_id
+    FROM mixreport
+    WHERE Timestamp < NEW.Timestamp
+    ORDER BY Timestamp DESC
+    LIMIT 1;
+
+    -- Если предыдущая запись найдена
+    IF previous_timestamp IS NOT NULL THEN
+        -- Сравнение временного интервала и значения Data_52
+        SET time_difference = TIMEDIFF(NEW.Timestamp, previous_timestamp);
+        IF time_difference >= '00:07:30' THEN
+            IF previous_data_52 = NEW.Data_52 THEN
+                -- Проверка, что previous_id и NEW.DBID еще не были использованы
+                IF NOT EXISTS (
+                    SELECT 1 FROM comparison_results
+                    WHERE table1_id = previous_id OR table2_id = previous_id
+                    OR table1_id = NEW.DBID OR table2_id = NEW.DBID
+                ) THEN
+                    -- Вставка данных в comparison_results
+                    INSERT INTO comparison_results (table1_id, table2_id, difference, data_52)
+                    VALUES (previous_id, NEW.DBID, time_difference, NEW.Data_52);
+                END IF;
+            END IF;
+        END IF;
+    END IF;
+END;
+
+";
+
+                    using (var command = new MySqlCommand(createTriggerQuery, connection))
+                    {
+                        await command.ExecuteNonQueryAsync();
+                        _logger.Trace("Triger create complite");
+                        Console.WriteLine("Триггер create complite");
+                    }
+                }
+                catch(TimeoutException ex)
+                {
+                    return (false, ex);
+                }
+                catch (AggregateException ex)
+                {
+                    // Пробегаем все вложенные исключения
+                    foreach (var innerEx in ex.InnerExceptions)
+                    {
+                        return (false, ex);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    return (false, ex);
+                }
+                finally { await connection.CloseAsync(); }
+
+                return (true, null);
+            
+            }
+        }
+
+        private async Task<(bool isComplite, Exception error)> DropTrigerInServer()
+        {
+            using (MySqlConnection connection = new MySqlConnection(ConfigurationManager.ConnectionStrings["Server"].ConnectionString))
+            {
+                try
+                {
+
+                    
+                    await connection.OpenAsync();
+
+                    string dropTriggerSql = "DROP TRIGGER IF EXISTS after_insert_mixreport_second;";
+
+                    using (var dropCommand = new MySqlCommand(dropTriggerSql, connection))
+                    {
+                        await dropCommand.ExecuteNonQueryAsync();
+                        _logger.Trace("Triger delite");
+                        Console.WriteLine("Triger delite");
+                    }
+                }
+                catch(InvalidOperationException ex)
+                {
+                    return (false, ex);
+                }
+                catch (TimeoutException ex)
+                {
+                    return (false, ex);
+                }
+                catch (AggregateException ex)
+                {
+                    // Пробегаем все вложенные исключения
+                    foreach (var innerEx in ex.InnerExceptions)
+                    {
+                        return (false, ex);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.Error(ex, ex.Message + $"\n == {ex.TargetSite} ==");
+                    return (false, ex);
+                }
+                finally
+                {
+                    await connection.CloseAsync();
+                }
+            }
+            return (true, null);
         }
     }
 }

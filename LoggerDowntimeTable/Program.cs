@@ -37,23 +37,36 @@ namespace LoggerDowntimeTable
                     }
 
                     _logger.Trace("Сверка Recepts прошла успешно");
+                    
+                    var result2 = await db.CreateTrigerInServer();
 
-
+                    if (result2.error != null) 
+                    {
+                        throw result2.error;
+                    }
 
                     _logger.Trace("Конец цикла");
                     Thread.Sleep(5000);
                 }
+                catch(AggregateException ex)
+                {
+                    Console.WriteLine(ex.Message);
+                }
                 catch (ExceptionRecept ex)
                 {
-
+                    Console.WriteLine(ex.Message);
                 }
                 catch (MySqlException ex)
                 {
-
+                    Console.WriteLine(ex.Message);
                 }
-                catch(Exception ex)
+                catch(TimeoutException ex)
                 {
-
+                    Console.WriteLine(ex.Message);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine(ex.Message);
                 }
             }
         }
